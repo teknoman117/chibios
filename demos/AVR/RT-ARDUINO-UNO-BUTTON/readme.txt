@@ -16,9 +16,9 @@ enabled on PD2.
 The button is serviced by INT0 using the PAL callback API:
 - The PAL callback runs in ISR context outside the kernel lock, it restarts
   a 50ms debounce virtual timer under chSysLockFromISR().
-- The debounce timer callback runs in I-Locked state, if the button is still
-  pressed it selects the next rate, re-arms the blink timer and broadcasts
-  an event.
+- The debounce timer callback runs in ISR context outside the kernel lock,
+  if the button is still pressed it selects the next rate and, under
+  chSysLockFromISR(), re-arms the blink timer and broadcasts an event.
 - The main thread waits for the event and prints the new period on Serial0,
   which is available on the board USB connector, 38400 baud 8N1.
 

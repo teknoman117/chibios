@@ -40,20 +40,23 @@ static virtual_timer_t debounce_vt;
 static event_source_t rate_changed_es;
 
 /*
- * Blink timer callback, invoked from the system tick ISR in I-Locked state.
+ * Blink timer callback, invoked from the system tick ISR outside the
+ * kernel lock.
  */
 static void blink_cb(virtual_timer_t *vtp, void *arg) {
 
   (void)arg;
 
   palToggleLine(LINE_LED1);
+  chSysLockFromISR();
   chVTSetI(vtp, TIME_MS2I(blink_ms[current_rate]), blink_cb, NULL);
+  chSysUnlockFromISR();
 }
 
 /*
- * Debounce timer callback, invoked from the system tick ISR in I-Locked
- * state once the button has been quiet for DEBOUNCE_INTERVAL. Only a button
- * still held low counts as a press, release bounces are discarded.
+ * Debounce timer callback, invoked from the system tick ISR outside the
+ * kernel lock once the button has been quiet for DEBOUNCE_INTERVAL. Only a
+ * button still held low counts as a press, release bounces are discarded.
  */
 static void debounce_cb(virtual_timer_t *vtp, void *arg) {
 
@@ -62,8 +65,10 @@ static void debounce_cb(virtual_timer_t *vtp, void *arg) {
 
   if (palReadLine(LINE_BUTTON) == PAL_LOW) {
     current_rate = (uint8_t)((current_rate + 1U) % BLINK_RATES_NUM);
+    chSysLockFromISR();
     chVTSetI(&blink_vt, TIME_MS2I(blink_ms[current_rate]), blink_cb, NULL);
     chEvtBroadcastI(&rate_changed_es);
+    chSysUnlockFromISR();
   }
 }
 
