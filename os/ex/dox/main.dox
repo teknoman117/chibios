@@ -96,6 +96,13 @@
  */
 
 /**
+ * @defgroup EX_GENERIC Generic Devices
+ * @brief   Vendor independent devices built on HAL services.
+ *
+ * @ingroup EX_DEVICES
+ */
+
+/**
  * @defgroup EX_ST STMicroelectronics Devices
  * @brief   STMicroelectronics Devices.
  *
