@@ -31,6 +31,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <util/crc16.h>
+
 /**
  * @brief   CRC-16/CCITT-FALSE initial value.
  */
@@ -46,21 +48,24 @@
  * @brief   Decoder results.
  */
 typedef enum {
-  COBS_NONE = 0,                /**< Frame in progress.                     */
-  COBS_PACKET,                  /**< Valid packet, CRC verified.            */
-  COBS_ERROR                    /**< Malformed, oversized or bad CRC.       */
+  COBS_NONE = 0,                /**< No decoded byte.                       */
+  COBS_DATA,                    /**< One decoded byte returned.             */
+  COBS_PACKET,                  /**< Frame end, CRC verified.               */
+  COBS_ERROR                    /**< Frame end, malformed or bad CRC.       */
 } cobs_result_t;
 
 /**
  * @brief   Incremental decoder, one byte at a time, suitable for ISRs.
+ * @details The decoder does not store data, each decoded byte is returned
+ *          to the caller. The CRC is updated as the bytes are decoded so
+ *          the frame end check does not depend on the frame size.
  */
 typedef struct {
-  uint8_t       *buf;           /**< Destination buffer.                    */
-  uint8_t       size;           /**< Destination buffer size.               */
+  uint16_t      crc;            /**< Running CRC of the decoded bytes.      */
   uint8_t       len;            /**< Decoded bytes, CRC included.           */
   uint8_t       block;          /**< Data bytes left in the current block.  */
   uint8_t       code;           /**< Current block code.                    */
-  bool          started;        /**< A code byte has been received.         */
+  bool          started;        /**< A frame is in progress.                */
   bool          error;          /**< Frame to be discarded.                 */
 } cobs_decoder_t;
 
@@ -78,9 +83,6 @@ typedef struct {
 #ifdef __cplusplus
 extern "C" {
 #endif
-  void cobsDecoderInit(cobs_decoder_t *dp, uint8_t *buf, uint8_t size);
-  void cobsDecoderReset(cobs_decoder_t *dp);
-  cobs_result_t cobsDecodeByte(cobs_decoder_t *dp, uint8_t b);
   void cobsEncoderInit(cobs_encoder_t *ep, uint8_t *buf);
   void cobsEncodeByte(cobs_encoder_t *ep, uint8_t b);
   size_t cobsEncoderFinish(cobs_encoder_t *ep);
@@ -89,8 +91,81 @@ extern "C" {
 #endif
 
 /**
- * @brief   Payload size of a decoded packet.
+ * @brief   Initializes a decoder.
+ *
+ * @param[out] dp       decoder
  */
-#define cobsPayloadSize(dp)     ((uint8_t)((dp)->len - 2U))
+static inline void cobsDecoderInit(cobs_decoder_t *dp) {
+
+  dp->started = false;
+  dp->error   = false;
+  dp->len     = 0U;
+}
+
+/**
+ * @brief   Feeds one received byte to the decoder.
+ * @note    At most one byte is decoded for each received byte: the zero
+ *          implied by a block is returned when the next code byte is
+ *          received, the last block of a frame has no implied zero. After
+ *          @p COBS_PACKET or @p COBS_ERROR the @p len field holds the
+ *          decoded size of the frame, CRC included.
+ *
+ * @param[in,out] dp    decoder
+ * @param[in] b         received byte
+ * @param[out] outp     decoded byte, valid on @p COBS_DATA
+ * @return              The decoder result for this byte.
+ */
+static inline cobs_result_t cobsDecodeByte(cobs_decoder_t *dp, uint8_t b,
+                                           uint8_t *outp) {
+  uint8_t data;
+
+  if (b == 0U) {
+    bool valid;
+
+    /* Delimiter, empty frames are idle fill and are ignored.*/
+    if (!dp->started) {
+      return COBS_NONE;
+    }
+
+    /* A delimiter inside a block means a truncated frame.*/
+    valid = !dp->error && (dp->block == 0U) && (dp->len >= 2U) &&
+            (dp->crc == 0U);
+    dp->started = false;
+    return valid ? COBS_PACKET : COBS_ERROR;
+  }
+
+  if (!dp->started) {
+    /* First code byte of a frame.*/
+    dp->started = true;
+    dp->error   = false;
+    dp->len     = 0U;
+    dp->crc     = COBS_CRC_INIT;
+    dp->code    = b;
+    dp->block   = (uint8_t)(b - 1U);
+    return COBS_NONE;
+  }
+
+  if (dp->block != 0U) {
+    dp->block--;
+    data = b;
+  }
+  else {
+    /* Code byte, the previous block implies a zero unless it was a
+       maximum length block.*/
+    bool zero = dp->code != 0xFFU;
+
+    dp->code  = b;
+    dp->block = (uint8_t)(b - 1U);
+    if (!zero) {
+      return COBS_NONE;
+    }
+    data = 0U;
+  }
+
+  dp->len++;
+  dp->crc = _crc_xmodem_update(dp->crc, data);
+  *outp = data;
+  return COBS_DATA;
+}
 
 #endif /* COBS_H */
