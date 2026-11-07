@@ -34,7 +34,11 @@ static const uint16_t blink_ms[] = {100U, 250U, 500U, 1000U};
 
 #define BLINK_RATES_NUM         (sizeof (blink_ms) / sizeof (blink_ms[0]))
 
-static volatile uint8_t current_rate;
+/*
+ * Index of the current blink rate, shared between the timer callbacks and
+ * the main thread. It is only read or written under the kernel lock.
+ */
+static uint8_t current_rate;
 static virtual_timer_t blink_vt;
 static virtual_timer_t debounce_vt;
 static event_source_t rate_changed_es;
@@ -64,8 +68,8 @@ static void debounce_cb(virtual_timer_t *vtp, void *arg) {
   (void)arg;
 
   if (palReadLine(LINE_BUTTON) == PAL_LOW) {
-    current_rate = (uint8_t)((current_rate + 1U) % BLINK_RATES_NUM);
     chSysLockFromISR();
+    current_rate = (uint8_t)((current_rate + 1U) % BLINK_RATES_NUM);
     chVTSetI(&blink_vt, TIME_MS2I(blink_ms[current_rate]), blink_cb, NULL);
     chEvtBroadcastI(&rate_changed_es);
     chSysUnlockFromISR();
@@ -90,6 +94,7 @@ static void button_cb(void *arg) {
  */
 int main(void) {
   event_listener_t el;
+  uint8_t rate;
 
   /*
    * System initializations.
@@ -122,14 +127,19 @@ int main(void) {
   palSetLineCallback(LINE_BUTTON, button_cb, NULL);
   palEnableLineEvent(LINE_BUTTON, PAL_EVENT_MODE_FALLING_EDGE);
 
-  chVTSet(&blink_vt, TIME_MS2I(blink_ms[current_rate]), blink_cb, NULL);
+  chSysLock();
+  chVTSetI(&blink_vt, TIME_MS2I(blink_ms[current_rate]), blink_cb, NULL);
+  chSysUnlock();
 
   /*
    * Reports the blink period on each rate change.
    */
   while (true) {
+    chSysLock();
+    rate = current_rate;
+    chSysUnlock();
     chprintf((BaseSequentialStream *)&SD1, "Blink period: %u ms\r\n",
-             blink_ms[current_rate]);
+             blink_ms[rate]);
     (void) chEvtWaitAny(EVT_RATE_CHANGED);
   }
 }

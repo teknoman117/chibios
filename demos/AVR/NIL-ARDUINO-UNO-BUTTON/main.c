@@ -39,7 +39,32 @@ static const struct {
 
 #define BLINK_RATES_NUM         (sizeof (blink_rates) / sizeof (blink_rates[0]))
 
-static volatile uint8_t current_rate;
+/*
+ * Index of the current blink rate, shared between the two threads. It is
+ * only read or written under the kernel lock.
+ */
+static uint8_t current_rate;
+
+static uint8_t get_rate(void) {
+  uint8_t rate;
+
+  chSysLock();
+  rate = current_rate;
+  chSysUnlock();
+
+  return rate;
+}
+
+static uint8_t next_rate(void) {
+  uint8_t rate;
+
+  chSysLock();
+  rate = (uint8_t)((current_rate + 1U) % BLINK_RATES_NUM);
+  current_rate = rate;
+  chSysUnlock();
+
+  return rate;
+}
 
 static void print(const char *s) {
   size_t n = 0U;
@@ -61,7 +86,7 @@ THD_FUNCTION(Thread1, arg) {
   palSetLineMode(LINE_LED1, PAL_MODE_OUTPUT_PUSHPULL);
   while (true) {
     palToggleLine(LINE_LED1);
-    chThdSleepMilliseconds(blink_rates[current_rate].ms);
+    chThdSleepMilliseconds(blink_rates[get_rate()].ms);
   }
 }
 
@@ -79,7 +104,7 @@ THD_FUNCTION(Thread2, arg) {
    */
   sdStart(&SD1, NULL);
   print("\r\nNIL button demo, press the button on pin 2\r\n");
-  print(blink_rates[current_rate].msg);
+  print(blink_rates[get_rate()].msg);
 
   /*
    * Button setup, the event is serviced by INT0.
@@ -95,8 +120,7 @@ THD_FUNCTION(Thread2, arg) {
        interval.*/
     chThdSleepMilliseconds(DEBOUNCE_MS);
     if (palReadLine(LINE_BUTTON) == PAL_LOW) {
-      current_rate = (uint8_t)((current_rate + 1U) % BLINK_RATES_NUM);
-      print(blink_rates[current_rate].msg);
+      print(blink_rates[next_rate()].msg);
     }
   }
 }
